@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0c1222">
+  <meta name="description" content="キクヤ堺本店のパチスロ狙い台をデータからランキングするPWA">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+  <title>狙い台AI v0.3</title>
+</head>
+<body>
+  <header class="topbar">
+    <div><span class="eyebrow">KIKUYA SAKAI</span><h1>狙い台AI <small>v0.3</small></h1></div>
+    <button id="syncBtn" class="sync" aria-label="Google Driveと同期"><span id="syncDot"></span><b>Drive同期</b></button>
+  </header>
+
+  <main>
+    <section id="dashboard" class="page active">
+      <div class="hero">
+        <div><p id="todayLabel"></p><h2>今日の狙い台</h2></div>
+        <button id="refreshScore" class="ghost">再計算</button>
+      </div>
+      <div id="summary" class="summary"></div>
+      <div id="ranking" class="ranking empty-card"></div>
+    </section>
+
+    <section id="input" class="page">
+      <div class="section-title"><div><span class="eyebrow">DATA ENTRY</span><h2>データを記録</h2></div></div>
+      <div class="mode-tabs"><button class="mode active" data-mode="manual">手入力</button><button class="mode" data-mode="screenshot">スクショAI</button></div>
+      <form id="recordForm" class="panel form-grid">
+        <label>日付<input id="date" type="date" required></label>
+        <label>ホール<select id="hall"><option>キクヤ堺本店</option></select></label>
+        <label>機種<select id="machine"><option>L真打吉宗</option></select></label>
+        <label>配置番号<input id="position" inputmode="numeric" placeholder="例: 101" required></label>
+        <label>台番号<input id="unit" inputmode="numeric" placeholder="例: 1234" required></label>
+        <label>総回転数<input id="games" type="number" min="0" placeholder="例: 5420" required></label>
+        <label>BB回数<input id="bb" type="number" min="0" value="0" required></label>
+        <label>RB回数<input id="rb" type="number" min="0" value="0" required></label>
+        <label>差枚<input id="difference" type="number" placeholder="例: 1850" required></label>
+        <label class="wide">メモ<textarea id="memo" rows="2" placeholder="イベント、据え置き傾向など"></textarea></label>
+        <button class="primary wide" type="submit">このデータを保存</button>
+      </form>
+      <div id="screenshotPanel" class="panel screenshot-panel hidden">
+        <input id="screenshot" type="file" accept="image/*" capture="environment" hidden>
+        <button id="pickScreenshot" class="dropzone"><b>スクリーンショットを選ぶ</b><span>画像から日付・台番号・回転数・差枚を読み取ります</span></button>
+        <img id="preview" alt="選択したスクリーンショット" hidden>
+        <button id="analyze" class="primary" disabled>AIで読み取る</button>
+        <p class="hint">設定画面でOpenAI APIキーを登録すると利用できます。画像は端末からOpenAIへ直接送信されます。</p>
+      </div>
+    </section>
+
+    <section id="history" class="page">
+      <div class="section-title"><div><span class="eyebrow">HISTORY</span><h2>記録履歴</h2></div><button id="exportBtn" class="ghost">JSON出力</button></div>
+      <div id="chart" class="panel chart"></div>
+      <div id="historyList"></div>
+    </section>
+
+    <section id="settings" class="page">
+      <div class="section-title"><div><span class="eyebrow">SETTINGS</span><h2>設定</h2></div></div>
+      <form id="settingsForm" class="panel form-grid">
+        <label class="wide">OpenAI APIキー<input id="openaiKey" type="password" autocomplete="off" placeholder="sk-...（この端末だけに保存）"></label>
+        <label class="wide">Google OAuth クライアントID<input id="googleClientId" placeholder="xxxx.apps.googleusercontent.com"></label>
+        <button class="primary wide">設定を保存</button>
+      </form>
+      <div class="panel"><h3>マスタ管理</h3><p>Version 1: キクヤ堺本店 / L真打吉宗</p><p class="hint">データ構造は複数ホール・複数機種・配置番号と台番号の履歴に対応しています。</p></div>
+      <button id="demoBtn" class="ghost full">サンプルデータを追加</button>
+      <button id="clearBtn" class="danger full">全データを削除</button>
+    </section>
+  </main>
+
+  <nav class="bottom-nav">
+    <button class="nav active" data-page="dashboard"><span>◎</span>ランキング</button>
+    <button class="nav" data-page="input"><span>＋</span>入力</button>
+    <button class="nav" data-page="history"><span>⌁</span>履歴</button>
+    <button class="nav" data-page="settings"><span>⚙</span>設定</button>
+  </nav>
+  <div id="toast" role="status"></div>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="app.js"></script>
+</body>
+</html>
