@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../src/index.js";
 
-const origin = "https://nakamuraryota123-lang.github.io";
+const origin = "https://neraidai-ai.pages.dev";
 const env = { OPENAI_API_KEY: "test-only", AI_RATE_LIMITER: { limit: async () => ({ success: true }) } };
 
 function analyzeRequest() {

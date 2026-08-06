@@ -1,5 +1,7 @@
 const ALLOWED_ORIGINS = new Set([
   "https://nakamuraryota123-lang.github.io",
+  "https://neraidai-ai.pages.dev",
+  "https://black-smoke-f8ae.icy-haze-1848.workers.dev",
   "http://127.0.0.1:4173",
   "http://localhost:4173"
 ]);
