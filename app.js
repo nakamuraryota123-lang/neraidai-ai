@@ -39,6 +39,13 @@ function canonicalMachine(value) {
   return { machineId: `custom:${key || "unknown"}`, machine: raw || "機種未設定" };
 }
 
+function placementKey(value) {
+  const normalized = String(value || "").normalize("NFKC").trim();
+  const digits = normalized.replace(/\D/g, "");
+  if (digits) return String(Number.parseInt(digits, 10));
+  return normalized.toLowerCase().replace(/\s/g, "");
+}
+
 function normalizeStoredRecord(record = {}) {
   return { ...record, ...canonicalMachine(record.machine) };
 }
@@ -320,7 +327,7 @@ function scoreRecord(record) {
 function rankedRecords() {
   const latestByUnit = new Map();
   [...state.records].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).forEach((record) => {
-    const stablePosition = String(record.position || record.unit || "").trim();
+    const stablePosition = placementKey(record.position || record.unit);
     latestByUnit.set(`${record.hall}|${record.machineId || canonicalMachine(record.machine).machineId}|${stablePosition}`, record);
   });
   return [...latestByUnit.values()].map((record) => ({ ...record, ...scoreRecord(record) })).sort((a, b) => b.score - a.score || Number(a.unit) - Number(b.unit));
