@@ -71,6 +71,44 @@ function parseModelRows(text) {
   return parsed.rows;
 }
 
+function upstreamErrorResponse(result, status, origin) {
+  const upstreamCode = String(result?.error?.code || "");
+  const upstreamType = String(result?.error?.type || "");
+
+  if (status === 401 || upstreamCode === "invalid_api_key") {
+    return jsonResponse({
+      error: "OpenAI APIキーが無効です。管理者がWorkerのOPENAI_API_KEYを再設定してください。",
+      code: "OPENAI_AUTH_FAILED"
+    }, 502, origin);
+  }
+
+  if (status === 429 && (upstreamCode === "insufficient_quota" || upstreamType === "insufficient_quota")) {
+    return jsonResponse({
+      error: "OpenAI APIの残高または利用上限を確認してください。ChatGPTの契約とは別にAPIの支払い設定が必要です。",
+      code: "OPENAI_QUOTA_EXCEEDED"
+    }, 502, origin);
+  }
+
+  if (status === 429) {
+    return jsonResponse({
+      error: "OpenAI APIが混雑または利用上限に達しています。少し待ってから再試行してください。",
+      code: "OPENAI_RATE_LIMITED"
+    }, 503, origin);
+  }
+
+  if (status === 400) {
+    return jsonResponse({
+      error: "画像をOpenAI APIで処理できませんでした。PNGまたはJPEG画像を減らして再試行してください。",
+      code: "OPENAI_BAD_REQUEST"
+    }, 400, origin);
+  }
+
+  return jsonResponse({
+    error: "AI読み取りサービスでエラーが発生しました。少し待ってから再試行してください。",
+    code: "OPENAI_UPSTREAM_ERROR"
+  }, 502, origin);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -102,8 +140,13 @@ export default {
       });
       const result = await upstream.json();
       if (!upstream.ok) {
-        console.error(JSON.stringify({ event: "openai_error", status: upstream.status, requestId: upstream.headers.get("x-request-id") }));
-        return jsonResponse({ error: "AI読取サービスでエラーが発生しました" }, 502, origin);
+        console.error(JSON.stringify({
+          event: "openai_error",
+          status: upstream.status,
+          code: result?.error?.code || result?.error?.type || "unknown",
+          requestId: upstream.headers.get("x-request-id")
+        }));
+        return upstreamErrorResponse(result, upstream.status, origin);
       }
       return jsonResponse({ rows: parseModelRows(outputText(result)) }, 200, origin);
     } catch (error) {
