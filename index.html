@@ -45,8 +45,8 @@
         <label>日付<input id="date" type="date" required></label>
         <label>ホール<input id="hall" value="キクヤ堺本店" required></label>
         <label>機種<input id="machine" value="L真打吉宗" required></label>
-        <label>配置番号<input id="position" inputmode="numeric" placeholder="例: 101" required></label>
-        <label>台番号<input id="unit" inputmode="numeric" placeholder="例: 0531" required></label>
+        <input id="position" type="hidden">
+        <label>台番号（配置番号にも使用）<input id="unit" inputmode="numeric" placeholder="例: 0531" required></label>
         <label>総回転数<input id="games" type="number" min="0" value="0" required></label>
         <label>BIG<input id="bb" type="number" min="0" value="0" required></label>
         <label>REG<input id="rb" type="number" min="0" value="0" required></label>
