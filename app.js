@@ -17,6 +17,32 @@ const graphPatterns = {
   unknown: "不明"
 };
 
+const machineCatalog = [
+  {
+    id: "l_shinuchi_yoshimune",
+    name: "L真打吉宗",
+    aliases: ["L真打吉宗", "真打吉宗", "Ｌ真打吉宗", "L 真打吉宗", "スマスロ真打吉宗"]
+  }
+];
+
+function machineKey(value) {
+  return String(value || "").normalize("NFKC").toLowerCase()
+    .replace(/[\s・･_＿\-ー]/g, "").replace(/[()（）【】\[\]]/g, "");
+}
+
+function canonicalMachine(value) {
+  const raw = String(value || "").trim();
+  const key = machineKey(raw);
+  const known = machineCatalog.find((machine) => machine.aliases.some((alias) => machineKey(alias) === key))
+    || (key.includes("真打") && key.includes("吉宗") ? machineCatalog[0] : null);
+  if (known) return { machineId: known.id, machine: known.name };
+  return { machineId: `custom:${key || "unknown"}`, machine: raw || "機種未設定" };
+}
+
+function normalizeStoredRecord(record = {}) {
+  return { ...record, ...canonicalMachine(record.machine) };
+}
+
 const today = new Date().toISOString().slice(0, 10);
 const state = loadState();
 persist();
@@ -35,7 +61,7 @@ function loadState() {
       const settings = current.settings || {};
       delete settings.openaiKey;
       return {
-        records: current.records,
+        records: current.records.map(normalizeStoredRecord),
         settings,
         deletedRecordIds: Array.isArray(current.deletedRecordIds) ? current.deletedRecordIds : []
       };
@@ -43,7 +69,7 @@ function loadState() {
     const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY));
     if (legacy?.records) {
       return {
-        records: legacy.records.map((record) => ({
+        records: legacy.records.map((record) => normalizeStoredRecord({
           ...record,
           maxPayout: Math.max(0, Number(record.maxPayout ?? record.difference ?? 0)),
           graphPattern: record.graphPattern || (Number(record.difference) > 0 ? "uptrend" : "unknown")
@@ -148,19 +174,13 @@ function renderImages() {
   $("#analyzeAll").disabled = !selectedFiles.length;
 }
 
-function normalizeMachineName() {
-  // v0.4 supports this machine only. Keep screenshot OCR variations from
-  // creating separate machine names until the machine master is introduced.
-  return "L真打吉宗";
-}
-
 function normalizeRow(row = {}) {
   const text = (value, fallback = "") => value == null ? fallback : String(value);
   const number = (value) => Math.max(0, Number.parseInt(value, 10) || 0);
   return {
     date: /^\d{4}-\d{2}-\d{2}$/.test(row.date) ? row.date : today,
     hall: "キクヤ堺本店",
-    machine: normalizeMachineName(row.machine),
+    ...canonicalMachine(row.machine),
     position: text(row.position || row.unit),
     unit: text(row.unit || row.position),
     games: number(row.games), bb: number(row.bb), rb: number(row.rb),
@@ -299,7 +319,7 @@ function scoreRecord(record) {
 
 function rankedRecords() {
   const latestByUnit = new Map();
-  [...state.records].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).forEach((record) => latestByUnit.set(`${record.hall}|${record.machine}|${record.position}|${record.unit}`, record));
+  [...state.records].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).forEach((record) => latestByUnit.set(`${record.hall}|${record.machineId || canonicalMachine(record.machine).machineId}|${record.position}|${record.unit}`, record));
   return [...latestByUnit.values()].map((record) => ({ ...record, ...scoreRecord(record) })).sort((a, b) => b.score - a.score || Number(a.unit) - Number(b.unit));
 }
 
@@ -319,7 +339,22 @@ function renderHistory() {
   const max = Math.max(1, ...records.map((record) => Number(record.maxPayout) || 0));
   $("#chart").innerHTML = records.length ? `<div class="bars">${records.slice(0, 16).reverse().map((record) => `<div title="台${escapeHtml(record.unit)}: ${Number(record.maxPayout).toLocaleString()}枚"><span style="height:${Math.max(4, (Number(record.maxPayout) || 0) / max * 100)}%"></span><small>${escapeHtml(record.unit)}</small></div>`).join("")}</div>` : "<p>記録が増えると最大放出の比較を表示します。</p>";
   $("#historyList").innerHTML = records.map((record) => `
-    <article class="history-card"><div class="history-card-heading"><div><b>${escapeHtml(record.date)}　${escapeHtml(record.hall)}</b><span>${escapeHtml(record.machine)} / 配置 ${escapeHtml(record.position)} / 台 ${escapeHtml(record.unit)}</span></div><button class="history-delete" type="button" data-delete-record="${escapeHtml(record.id)}" aria-label="この履歴を削除">削除</button></div><dl><div><dt>総回転</dt><dd>${Number(record.games).toLocaleString()}</dd></div><div><dt>BIG / REG</dt><dd>${record.bb} / ${record.rb}</dd></div><div><dt>最大放出</dt><dd>${Number(record.maxPayout).toLocaleString()}</dd></div><div><dt>グラフ</dt><dd>${graphPatterns[record.graphPattern] || "不明"}</dd></div></dl>${record.memo ? `<p>${escapeHtml(record.memo)}</p>` : ""}</article>`).join("");
+    <article class="history-card"><div class="history-card-heading"><div><b>${escapeHtml(record.date)}　${escapeHtml(record.hall)}</b><span>${escapeHtml(record.machine)} / 配置 ${escapeHtml(record.position)} / 台 ${escapeHtml(record.unit)}</span></div><div class="history-actions"><button class="history-edit" type="button" data-edit-record="${escapeHtml(record.id)}" aria-label="この履歴の機種名を編集">編集</button><button class="history-delete" type="button" data-delete-record="${escapeHtml(record.id)}" aria-label="この履歴を削除">削除</button></div></div><dl><div><dt>総回転</dt><dd>${Number(record.games).toLocaleString()}</dd></div><div><dt>BIG / REG</dt><dd>${record.bb} / ${record.rb}</dd></div><div><dt>最大放出</dt><dd>${Number(record.maxPayout).toLocaleString()}</dd></div><div><dt>グラフ</dt><dd>${graphPatterns[record.graphPattern] || "不明"}</dd></div></dl>${record.memo ? `<p>${escapeHtml(record.memo)}</p>` : ""}</article>`).join("");
+}
+
+function editRecordMachine(recordId) {
+  const record = state.records.find((item) => item.id === recordId);
+  if (!record) return;
+  const entered = prompt("正しい機種名を入力してください", record.machine);
+  if (entered == null) return;
+  const canonical = canonicalMachine(entered);
+  const oldKey = machineKey(record.machine);
+  const sameVariant = state.records.filter((item) => machineKey(item.machine) === oldKey);
+  const updateAll = sameVariant.length > 1 && confirm(`同じ表記「${record.machine}」の履歴 ${sameVariant.length}件を、すべて「${canonical.machine}」へ統合しますか？`);
+  const targets = updateAll ? sameVariant : [record];
+  targets.forEach((item) => Object.assign(item, canonical, { updatedAt: new Date().toISOString() }));
+  persist(); renderAll();
+  toast(`${targets.length}件の機種名を「${canonical.machine}」へ統合しました。Drive同期で他端末にも反映されます`);
 }
 
 function deleteRecord(recordId) {
@@ -378,7 +413,7 @@ function saveSettings(event) {
 }
 
 function extractDriveRecords(payload) {
-  return Array.isArray(payload?.records) ? payload.records : [];
+  return Array.isArray(payload?.records) ? payload.records.map(normalizeStoredRecord) : [];
 }
 
 function extractDeletedRecordIds(payload) {
@@ -404,7 +439,7 @@ async function syncDrive() {
       state.deletedRecordIds = [...new Set([...(state.deletedRecordIds || []), ...extractDeletedRecordIds(remote)])];
       const deleted = new Set(state.deletedRecordIds);
       const merged = new Map([...extractDriveRecords(remote), ...state.records].filter((record) => record.id && !deleted.has(record.id)).map((record) => [record.id, record]));
-      state.records = [...merged.values()];
+      state.records = [...merged.values()].map(normalizeStoredRecord);
     }
     const metadata = { name: "neraidai-v04.json", parents: list.files?.length ? undefined : ["appDataFolder"] };
     const boundary = `neraidai_${Date.now()}`;
@@ -432,7 +467,12 @@ $("#recordForm").addEventListener("submit", saveManual);
 $("#settingsForm").addEventListener("submit", saveSettings);
 $("#refreshScore").addEventListener("click", () => { renderRanking(); toast("ランキングを再計算しました"); });
 $("#exportBtn").addEventListener("click", exportJson);
-$("#historyList").addEventListener("click", (event) => { const recordId = event.target.dataset.deleteRecord; if (recordId) deleteRecord(recordId); });
+$("#historyList").addEventListener("click", (event) => {
+  const editId = event.target.dataset.editRecord;
+  const deleteId = event.target.dataset.deleteRecord;
+  if (editId) editRecordMachine(editId);
+  if (deleteId) deleteRecord(deleteId);
+});
 $("#demoBtn").addEventListener("click", addDemoData);
 $("#clearBtn").addEventListener("click", clearAll);
 $("#syncBtn").addEventListener("click", syncDrive);
