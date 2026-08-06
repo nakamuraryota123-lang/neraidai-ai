@@ -4,3 +4,5 @@ Thumbs.db
 .env*
 .gh/
 node_modules/
+.dev.vars
+.wrangler/

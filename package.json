@@ -1,0 +1,14 @@
+{
+  "name": "neraidai-ai",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check app.js && node --check sw.js && node --check worker/src/index.js",
+    "test": "node --test worker/test/index.test.js",
+    "worker:dev": "wrangler dev --config worker/wrangler.jsonc",
+    "worker:deploy": "wrangler deploy --config worker/wrangler.jsonc"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

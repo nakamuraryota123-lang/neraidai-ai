@@ -10,4 +10,6 @@ jobs:
       - name: Check required files
         run: test -f index.html && test -f app.js && test -f manifest.webmanifest && test -f sw.js
       - name: Validate JavaScript
-        run: node --check app.js && node --check sw.js
+        run: node --check app.js && node --check sw.js && node --check worker/src/index.js
+      - name: Test secure AI backend
+        run: node --test worker/test/index.test.js

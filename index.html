@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0c1222">
   <meta name="description" content="スクリーンショットから毎日のパチスロデータを記録し、狙い台をランキングするPWA">
+  <meta name="neraidai-api-url" content="https://neraidai-ai-api.neraidai-ai-nakamuraryota.workers.dev/v1/analyze">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg">
   <link rel="stylesheet" href="styles.css">
@@ -26,7 +27,7 @@
         <button id="pickScreenshots" class="dropzone" type="button"><b>スクリーンショットをまとめて選ぶ</b><span>複数枚を一度に選択できます</span></button>
         <div id="imageList" class="image-list" aria-live="polite"></div>
         <button id="analyzeAll" class="primary" type="button" disabled>AIでまとめて読み取る</button>
-        <p class="hint">画像は保存時にこの端末内へ保存されます。AI読取時のみ、選択画像をOpenAIへ送信します。</p>
+        <p class="hint">画像は保存時にこの端末内へ保存されます。AI読取時のみ、安全なバックエンド経由でOpenAIへ送信します。</p>
       </div>
 
       <form id="reviewForm" class="panel hidden">
@@ -71,11 +72,10 @@
     <section id="settings" class="page">
       <div class="section-title"><div><span class="eyebrow">SETTINGS</span><h2>設定</h2></div></div>
       <form id="settingsForm" class="panel form-grid">
-        <label class="wide">OpenAI APIキー<input id="openaiKey" type="password" autocomplete="off" placeholder="sk-...（この端末だけに保存）"></label>
         <label class="wide">Google OAuth クライアントID<input id="googleClientId" autocomplete="off" placeholder="xxxx.apps.googleusercontent.com"></label>
         <button class="primary wide">設定を保存</button>
       </form>
-      <div class="panel"><h3>端末内保存</h3><p class="hint">記録と設定はlocalStorage、元スクリーンショットはIndexedDBに保存します。APIキーや認証情報はGitHubへ送信されません。</p></div>
+      <div class="panel"><h3>安全なAI接続</h3><p class="hint">OpenAI APIキーはブラウザーやGitHub Pagesへ保存されません。AI読取はCloudflare Workerを経由し、キーはサーバー側のSecretだけに保存されます。</p></div>
       <button id="demoBtn" class="ghost full" type="button">サンプルデータを追加</button>
       <button id="clearBtn" class="danger full" type="button">全データを削除</button>
     </section>

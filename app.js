@@ -3,6 +3,7 @@ const LEGACY_KEY = "neraidai-v03";
 const DB_NAME = "neraidai-ai";
 const DB_VERSION = 1;
 const SCREENSHOT_STORE = "screenshots";
+const API_URL = document.querySelector('meta[name="neraidai-api-url"]')?.content?.trim() || "";
 
 const graphPatterns = {
   uptrend: "右肩上がり",
@@ -18,6 +19,8 @@ const graphPatterns = {
 
 const today = new Date().toISOString().slice(0, 10);
 const state = loadState();
+persist();
+localStorage.removeItem(LEGACY_KEY);
 let selectedFiles = [];
 let previewUrls = [];
 let reviewData = [];
@@ -28,7 +31,11 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 function loadState() {
   try {
     const current = JSON.parse(localStorage.getItem(STORE_KEY));
-    if (current?.records) return { records: current.records, settings: current.settings || {} };
+    if (current?.records) {
+      const settings = current.settings || {};
+      delete settings.openaiKey;
+      return { records: current.records, settings };
+    }
     const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY));
     if (legacy?.records) {
       return {
@@ -37,7 +44,7 @@ function loadState() {
           maxPayout: Math.max(0, Number(record.maxPayout ?? record.difference ?? 0)),
           graphPattern: record.graphPattern || (Number(record.difference) > 0 ? "uptrend" : "unknown")
         })),
-        settings: legacy.settings || {}
+        settings: (() => { const settings = legacy.settings || {}; delete settings.openaiKey; return settings; })()
       };
     }
   } catch (error) {
@@ -191,18 +198,9 @@ function fileToDataUrl(file) {
   });
 }
 
-function parseResponseJson(text) {
-  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const parsed = JSON.parse(cleaned);
-  if (!Array.isArray(parsed.rows)) throw new Error("AI応答にrows配列がありません");
-  return parsed.rows;
-}
-
 async function analyzeAll() {
-  const key = state.settings.openaiKey?.trim();
-  if (!key) {
-    showPage("settings");
-    toast("先に設定画面でOpenAI APIキーを保存してください", true);
+  if (!API_URL) {
+    toast("AIバックエンドを準備中です。管理者へ確認してください", true);
     return;
   }
   if (!selectedFiles.length) return;
@@ -211,16 +209,15 @@ async function analyzeAll() {
   button.textContent = `${selectedFiles.length}枚を読み取り中…`;
   try {
     const images = await Promise.all(selectedFiles.map(fileToDataUrl));
-    const prompt = `パチスロのデータ表示スクリーンショットをすべて読み取り、台ごとにJSONだけを返してください。形式は {"rows":[{"date":"YYYY-MM-DD","hall":"","machine":"","position":"","unit":"","games":0,"bb":0,"rb":0,"maxPayout":0,"graphPattern":"unknown","memo":""}]}。graphPatternは uptrend, downtrend, v_recovery, inverted_v, flat, spike, multiple_waves, inactive, unknown のいずれか。不明項目は空文字または0、日付不明なら${today}。台番号の先頭ゼロは保持してください。`;
-    const content = [{ type: "input_text", text: prompt }, ...images.map((image_url) => ({ type: "input_image", image_url }))];
-    const response = await fetch("https://api.openai.com/v1/responses", {
+    const response = await fetch(API_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model: "gpt-4.1-mini", input: [{ role: "user", content }], max_output_tokens: 5000 })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ images, today })
     });
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error?.message || `APIエラー (${response.status})`);
-    reviewData = parseResponseJson(payload.output_text || payload.output?.flatMap((item) => item.content || []).find((item) => item.type === "output_text")?.text || "").map(normalizeRow);
+    if (!response.ok) throw new Error(payload.error || `APIエラー (${response.status})`);
+    if (!Array.isArray(payload.rows)) throw new Error("読取結果の形式が正しくありません");
+    reviewData = payload.rows.map(normalizeRow);
     if (!reviewData.length) reviewData = [normalizeRow()];
     renderReview();
     $("#reviewForm").scrollIntoView({ behavior: "smooth" });
@@ -353,7 +350,6 @@ async function clearAll() {
 
 function saveSettings(event) {
   event.preventDefault();
-  state.settings.openaiKey = $("#openaiKey").value.trim();
   state.settings.googleClientId = $("#googleClientId").value.trim();
   persist(); toast("この端末に設定を保存しました");
 }
@@ -413,7 +409,6 @@ $("#syncBtn").addEventListener("click", syncDrive);
 
 $("#date").value = today;
 $("#todayLabel").textContent = new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "long", day: "numeric", weekday: "short" }).format(new Date());
-$("#openaiKey").value = state.settings.openaiKey || "";
 $("#googleClientId").value = state.settings.googleClientId || "";
 populateGraphSelects();
 renderAll();

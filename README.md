@@ -14,10 +14,9 @@
 
 ## 使い方
 
-1. 「設定」でOpenAI APIキーを保存します。
-2. 「入力」で複数のスクリーンショットを選択します。
-3. 「AIでまとめて読み取る」を押します。
-4. 表の内容を確認・修正して保存します。
+1. 「入力」で複数のスクリーンショットを選択します。
+2. 「AIでまとめて読み取る」を押します。
+3. 表の内容を確認・修正して保存します。
 
 手入力や未稼働データ（総回転数0）の保存も可能です。未稼働データは履歴に残り、ランキングの点数は0点になります。
 
@@ -25,9 +24,21 @@
 
 - 記録と設定: `localStorage`
 - 元スクリーンショット: `IndexedDB`
-- OpenAI APIキーとGoogle OAuthクライアントIDは端末内だけに保存し、ソースコードやJSON出力には含めません。
+- OpenAI APIキーはCloudflare WorkerのSecret `OPENAI_API_KEY`だけに保存し、ブラウザー、ソースコード、JSON出力には含めません。
+- ブラウザーはOpenAI APIを直接呼び出さず、固定のWorkerエンドポイントを呼び出します。
 - `.env*` とローカルCLI設定 `.gh/` はGit管理対象外です。
-- ブラウザからOpenAI APIを直接利用する構成のため、共用端末ではAPIキーを保存しないでください。本番で複数ユーザーへ配布する場合は、認証付きバックエンド経由への変更を推奨します。
+
+## AIバックエンド
+
+`worker/`はCloudflare Workers向けです。許可するOriginを公開中のGitHub Pagesへ固定し、1リクエスト8画像・合計25MBまで、同一接続元は1分10回までに制限しています。
+
+```powershell
+npx wrangler login
+npx wrangler secret put OPENAI_API_KEY --config worker/wrangler.jsonc
+npx wrangler deploy --config worker/wrangler.jsonc
+```
+
+本番エンドポイントは`https://neraidai-ai-api.neraidai-ai-nakamuraryota.workers.dev/v1/analyze`です。APIキーを`.dev.vars`やコマンド履歴へ直接書かないでください。
 
 ## GitHub Pages
 
