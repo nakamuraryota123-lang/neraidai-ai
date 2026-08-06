@@ -34,7 +34,11 @@ function loadState() {
     if (current?.records) {
       const settings = current.settings || {};
       delete settings.openaiKey;
-      return { records: current.records, settings };
+      return {
+        records: current.records,
+        settings,
+        deletedRecordIds: Array.isArray(current.deletedRecordIds) ? current.deletedRecordIds : []
+      };
     }
     const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY));
     if (legacy?.records) {
@@ -44,13 +48,14 @@ function loadState() {
           maxPayout: Math.max(0, Number(record.maxPayout ?? record.difference ?? 0)),
           graphPattern: record.graphPattern || (Number(record.difference) > 0 ? "uptrend" : "unknown")
         })),
-        settings: (() => { const settings = legacy.settings || {}; delete settings.openaiKey; return settings; })()
+        settings: (() => { const settings = legacy.settings || {}; delete settings.openaiKey; return settings; })(),
+        deletedRecordIds: []
       };
     }
   } catch (error) {
     console.warn("保存データを読み込めませんでした", error);
   }
-  return { records: [], settings: {} };
+  return { records: [], settings: {}, deletedRecordIds: [] };
 }
 
 function persist() {
@@ -314,7 +319,18 @@ function renderHistory() {
   const max = Math.max(1, ...records.map((record) => Number(record.maxPayout) || 0));
   $("#chart").innerHTML = records.length ? `<div class="bars">${records.slice(0, 16).reverse().map((record) => `<div title="台${escapeHtml(record.unit)}: ${Number(record.maxPayout).toLocaleString()}枚"><span style="height:${Math.max(4, (Number(record.maxPayout) || 0) / max * 100)}%"></span><small>${escapeHtml(record.unit)}</small></div>`).join("")}</div>` : "<p>記録が増えると最大放出の比較を表示します。</p>";
   $("#historyList").innerHTML = records.map((record) => `
-    <article class="history-card"><div><b>${escapeHtml(record.date)}　${escapeHtml(record.hall)}</b><span>${escapeHtml(record.machine)} / 配置 ${escapeHtml(record.position)} / 台 ${escapeHtml(record.unit)}</span></div><dl><div><dt>総回転</dt><dd>${Number(record.games).toLocaleString()}</dd></div><div><dt>BIG / REG</dt><dd>${record.bb} / ${record.rb}</dd></div><div><dt>最大放出</dt><dd>${Number(record.maxPayout).toLocaleString()}</dd></div><div><dt>グラフ</dt><dd>${graphPatterns[record.graphPattern] || "不明"}</dd></div></dl>${record.memo ? `<p>${escapeHtml(record.memo)}</p>` : ""}</article>`).join("");
+    <article class="history-card"><div class="history-card-heading"><div><b>${escapeHtml(record.date)}　${escapeHtml(record.hall)}</b><span>${escapeHtml(record.machine)} / 配置 ${escapeHtml(record.position)} / 台 ${escapeHtml(record.unit)}</span></div><button class="history-delete" type="button" data-delete-record="${escapeHtml(record.id)}" aria-label="この履歴を削除">削除</button></div><dl><div><dt>総回転</dt><dd>${Number(record.games).toLocaleString()}</dd></div><div><dt>BIG / REG</dt><dd>${record.bb} / ${record.rb}</dd></div><div><dt>最大放出</dt><dd>${Number(record.maxPayout).toLocaleString()}</dd></div><div><dt>グラフ</dt><dd>${graphPatterns[record.graphPattern] || "不明"}</dd></div></dl>${record.memo ? `<p>${escapeHtml(record.memo)}</p>` : ""}</article>`).join("");
+}
+
+function deleteRecord(recordId) {
+  const record = state.records.find((item) => item.id === recordId);
+  if (!record) return;
+  if (!confirm(`${record.date} / 台 ${record.unit} の履歴を削除しますか？`)) return;
+  state.records = state.records.filter((item) => item.id !== recordId);
+  state.deletedRecordIds = [...new Set([...(state.deletedRecordIds || []), recordId])];
+  persist();
+  renderAll();
+  toast("履歴を1件削除しました。次回のDrive同期で他端末にも反映されます");
 }
 
 function renderAll() {
@@ -347,6 +363,7 @@ function addDemoData() {
 
 async function clearAll() {
   if (!confirm("記録と端末内スクリーンショットをすべて削除しますか？")) return;
+  state.deletedRecordIds = [...new Set([...(state.deletedRecordIds || []), ...state.records.map((record) => record.id).filter(Boolean)])];
   state.records = [];
   persist();
   await clearScreenshots();
@@ -362,6 +379,10 @@ function saveSettings(event) {
 
 function extractDriveRecords(payload) {
   return Array.isArray(payload?.records) ? payload.records : [];
+}
+
+function extractDeletedRecordIds(payload) {
+  return Array.isArray(payload?.deletedRecordIds) ? payload.deletedRecordIds : [];
 }
 
 async function syncDrive() {
@@ -380,12 +401,14 @@ async function syncDrive() {
     const list = await fetch("https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D%27neraidai-v04.json%27&fields=files(id,modifiedTime)", { headers }).then((response) => response.json());
     if (list.files?.length) {
       const remote = await fetch(`https://www.googleapis.com/drive/v3/files/${list.files[0].id}?alt=media`, { headers }).then((response) => response.json());
-      const merged = new Map([...extractDriveRecords(remote), ...state.records].map((record) => [record.id, record]));
+      state.deletedRecordIds = [...new Set([...(state.deletedRecordIds || []), ...extractDeletedRecordIds(remote)])];
+      const deleted = new Set(state.deletedRecordIds);
+      const merged = new Map([...extractDriveRecords(remote), ...state.records].filter((record) => record.id && !deleted.has(record.id)).map((record) => [record.id, record]));
       state.records = [...merged.values()];
     }
     const metadata = { name: "neraidai-v04.json", parents: list.files?.length ? undefined : ["appDataFolder"] };
     const boundary = `neraidai_${Date.now()}`;
-    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ version: "0.4", records: state.records })}\r\n--${boundary}--`;
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ version: "0.4", records: state.records, deletedRecordIds: state.deletedRecordIds || [] })}\r\n--${boundary}--`;
     const fileId = list.files?.[0]?.id;
     const url = fileId ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart` : "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
     const response = await fetch(url, { method: fileId ? "PATCH" : "POST", headers: { ...headers, "Content-Type": `multipart/related; boundary=${boundary}` }, body });
@@ -409,6 +432,7 @@ $("#recordForm").addEventListener("submit", saveManual);
 $("#settingsForm").addEventListener("submit", saveSettings);
 $("#refreshScore").addEventListener("click", () => { renderRanking(); toast("ランキングを再計算しました"); });
 $("#exportBtn").addEventListener("click", exportJson);
+$("#historyList").addEventListener("click", (event) => { const recordId = event.target.dataset.deleteRecord; if (recordId) deleteRecord(recordId); });
 $("#demoBtn").addEventListener("click", addDemoData);
 $("#clearBtn").addEventListener("click", clearAll);
 $("#syncBtn").addEventListener("click", syncDrive);
