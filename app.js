@@ -3,7 +3,8 @@ const LEGACY_KEY = "neraidai-v03";
 const DB_NAME = "neraidai-ai";
 const DB_VERSION = 1;
 const SCREENSHOT_STORE = "screenshots";
-const API_URL = document.querySelector('meta[name="neraidai-api-url"]')?.content?.trim() || "";
+const isTestRuntime = globalThis.__NERAIDAI_TEST__ === true;
+const API_URL = isTestRuntime ? "" : document.querySelector('meta[name="neraidai-api-url"]')?.content?.trim() || "";
 
 const graphPatterns = {
   uptrend: "右肩上がり",
@@ -50,6 +51,17 @@ function normalizeStoredRecord(record = {}) {
   return { ...record, ...canonicalMachine(record.machine) };
 }
 
+function normalizePrediction(prediction = {}) {
+  return {
+    ...prediction,
+    entries: Array.isArray(prediction.entries) ? prediction.entries.map((entry) => ({
+      ...entry,
+      positionKey: placementKey(entry.positionKey || entry.position || entry.unit)
+    })) : [],
+    updatedAt: prediction.updatedAt || prediction.createdAt || ""
+  };
+}
+
 const today = new Date().toISOString().slice(0, 10);
 const state = loadState();
 persist();
@@ -70,7 +82,8 @@ function loadState() {
       return {
         records: current.records.map(normalizeStoredRecord),
         settings,
-        deletedRecordIds: Array.isArray(current.deletedRecordIds) ? current.deletedRecordIds : []
+        deletedRecordIds: Array.isArray(current.deletedRecordIds) ? current.deletedRecordIds : [],
+        predictions: Array.isArray(current.predictions) ? current.predictions.map(normalizePrediction) : []
       };
     }
     const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY));
@@ -82,13 +95,14 @@ function loadState() {
           graphPattern: record.graphPattern || (Number(record.difference) > 0 ? "uptrend" : "unknown")
         })),
         settings: (() => { const settings = legacy.settings || {}; delete settings.openaiKey; return settings; })(),
-        deletedRecordIds: []
+        deletedRecordIds: [],
+        predictions: []
       };
     }
   } catch (error) {
     console.warn("保存データを読み込めませんでした", error);
   }
-  return { records: [], settings: {}, deletedRecordIds: [] };
+  return { records: [], settings: {}, deletedRecordIds: [], predictions: [] };
 }
 
 function persist() {
@@ -316,21 +330,141 @@ function saveManual(event) {
 
 function scoreRecord(record) {
   const games = Number(record.games) || 0;
-  if (!games) return { score: 0, reason: "未稼働データ（ランキング対象外）" };
+  if (!games) return {
+    score: 0,
+    reason: "未稼働データ（ランキング対象外）",
+    reasons: ["稼働0Gのため判定対象外"],
+    scoreBreakdown: { base: 0, volume: 0, hitRate: 0, graph: 0, payout: 0, total: 0 }
+  };
   const hitsPer1000 = ((Number(record.bb) || 0) + (Number(record.rb) || 0)) / games * 1000;
-  const graphScore = { uptrend: 12, multiple_waves: 8, v_recovery: 6, flat: 1, unknown: 0, inverted_v: -2, spike: -3, downtrend: -8, inactive: -25 }[record.graphPattern] || 0;
-  const score = Math.round(Math.max(0, Math.min(100, 35 + Math.min(25, games / 240) + Math.min(20, hitsPer1000 * 2) + graphScore + Math.min(8, (Number(record.maxPayout) || 0) / 800))));
+  const scoreBreakdown = {
+    base: 35,
+    volume: Math.min(25, games / 240),
+    hitRate: Math.min(20, hitsPer1000 * 2),
+    graph: { uptrend: 12, multiple_waves: 8, v_recovery: 6, flat: 1, unknown: 0, inverted_v: -2, spike: -3, downtrend: -8, inactive: -25 }[record.graphPattern] || 0,
+    payout: Math.min(8, (Number(record.maxPayout) || 0) / 800)
+  };
+  const score = Math.round(Math.max(0, Math.min(100, Object.values(scoreBreakdown).reduce((sum, value) => sum + value, 0))));
+  scoreBreakdown.total = score;
   const reason = `${games.toLocaleString()}G・初当たり${hitsPer1000.toFixed(1)}/千G・${graphPatterns[record.graphPattern] || "不明"}`;
-  return { score, reason };
+  const reasons = [
+    `${games.toLocaleString()}Gの稼働量`,
+    `BIG+REGが${hitsPer1000.toFixed(1)}回/千G`,
+    `グラフ形状は${graphPatterns[record.graphPattern] || "不明"}`,
+    `最大放出${Number(record.maxPayout || 0).toLocaleString()}枚`
+  ];
+  return { score, reason, reasons, scoreBreakdown };
 }
 
-function rankedRecords() {
+function rankedRecords(records = state.records) {
   const latestByUnit = new Map();
-  [...state.records].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).forEach((record) => {
+  [...records].sort((a, b) => String(a.updatedAt || a.createdAt).localeCompare(String(b.updatedAt || b.createdAt))).forEach((record) => {
     const stablePosition = placementKey(record.position || record.unit);
     latestByUnit.set(`${record.hall}|${record.machineId || canonicalMachine(record.machine).machineId}|${stablePosition}`, record);
   });
   return [...latestByUnit.values()].map((record) => ({ ...record, ...scoreRecord(record) })).sort((a, b) => b.score - a.score || Number(a.unit) - Number(b.unit));
+}
+
+function addDays(date, days) {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function createPredictionSnapshots(records, predictionDate, targetDate = addDays(predictionDate, 1), idFactory = uid) {
+  const groups = new Map();
+  rankedRecords(records).filter((record) => Number(record.games) > 0).forEach((record) => {
+    const machine = canonicalMachine(record.machine);
+    const key = `${record.hall}|${record.machineId || machine.machineId}`;
+    if (!groups.has(key)) groups.set(key, { hall: record.hall, machineId: record.machineId || machine.machineId, entries: [] });
+    groups.get(key).entries.push(record);
+  });
+  const now = new Date().toISOString();
+  return [...groups.values()].map((group) => ({
+    id: idFactory("prediction"),
+    predictionDate,
+    targetDate,
+    hall: group.hall,
+    machineId: group.machineId,
+    createdAt: now,
+    updatedAt: now,
+    entries: group.entries.map((record, index) => ({
+      rank: index + 1,
+      positionKey: placementKey(record.position || record.unit),
+      position: String(record.position || record.unit || ""),
+      unit: String(record.unit || record.position || ""),
+      score: record.score,
+      scoreBreakdown: { ...record.scoreBreakdown },
+      reasons: [...record.reasons]
+    }))
+  }));
+}
+
+function mergePredictions(remote = [], local = []) {
+  const merged = new Map();
+  [...remote, ...local].map(normalizePrediction).filter((item) => item.id).forEach((item) => {
+    const current = merged.get(item.id);
+    const itemTime = String(item.updatedAt || item.createdAt || "");
+    const currentTime = String(current?.updatedAt || current?.createdAt || "");
+    if (!current || itemTime >= currentTime) merged.set(item.id, item);
+  });
+  return [...merged.values()];
+}
+
+function evaluatePrediction(prediction, records, evaluatedAt = new Date().toISOString()) {
+  const latestResults = new Map();
+  records.filter((record) => record.date === prediction.targetDate
+    && record.hall === prediction.hall
+    && (record.machineId || canonicalMachine(record.machine).machineId) === prediction.machineId)
+    .sort((a, b) => String(a.updatedAt || a.createdAt).localeCompare(String(b.updatedAt || b.createdAt)))
+    .forEach((record) => latestResults.set(placementKey(record.position || record.unit), record));
+
+  const top3 = prediction.entries.filter((entry) => entry.rank <= 3);
+  const results = top3.map((entry) => {
+    const actual = latestResults.get(placementKey(entry.positionKey || entry.position || entry.unit));
+    const eligible = Boolean(actual && Number(actual.games) > 0);
+    return {
+      rank: entry.rank,
+      positionKey: entry.positionKey,
+      unit: entry.unit,
+      eligible,
+      hit: eligible && Number(actual.maxPayout) >= 2000,
+      games: actual ? Number(actual.games) || 0 : null,
+      maxPayout: actual ? Number(actual.maxPayout) || 0 : null
+    };
+  });
+  const eligibleCount = results.filter((item) => item.eligible).length;
+  if (!eligibleCount) return null;
+  const hitCount = results.filter((item) => item.hit).length;
+  const misses = results.filter((item) => item.eligible && !item.hit).length;
+  return {
+    evaluatedAt,
+    criteria: { maxPayoutAtLeast: 2000, inactiveExcluded: true },
+    top3Count: top3.length,
+    eligibleCount,
+    hitCount,
+    hitRate: Math.round(hitCount / eligibleCount * 100),
+    results,
+    goodPoints: hitCount ? [`上位3台から${hitCount}台が2,000枚以上を記録`] : ["予想時点の根拠と実績を同じ配置で比較できた"],
+    reflectionPoints: misses ? [`判定対象${eligibleCount}台のうち${misses}台が2,000枚未満`] : ["判定対象の上位台はすべて的中"],
+    improvements: misses ? ["外れた台のグラフ形状と初当たり比率を次回の重み調整候補にする"] : ["同じ基準で予想を継続し、再現性を確認する"]
+  };
+}
+
+function evaluatePredictions(predictions, records, now = new Date().toISOString()) {
+  let changed = false;
+  const currentDate = now.slice(0, 10);
+  const next = predictions.map((prediction) => {
+    if (prediction.targetDate > currentDate) return prediction;
+    const evaluation = evaluatePrediction(prediction, records, now);
+    if (!evaluation) return prediction;
+    const comparable = JSON.stringify({ ...evaluation, evaluatedAt: undefined });
+    const previous = JSON.stringify({ ...prediction.evaluation, evaluatedAt: undefined });
+    if (comparable === previous) return prediction;
+    changed = true;
+    return { ...prediction, evaluation, updatedAt: now };
+  });
+  return { predictions: next, changed };
 }
 
 function renderRanking() {
@@ -340,8 +474,44 @@ function renderRanking() {
   $("#ranking").className = ranked.length ? "ranking" : "ranking empty-card";
   $("#ranking").innerHTML = ranked.length ? ranked.map((record, index) => `
     <article class="rank-card ${index === 0 ? "top" : ""}">
-      <span class="rank">${index + 1}</span><div class="rank-main"><b>配置 ${escapeHtml(record.position)} / 台 ${escapeHtml(record.unit)}</b><small>${escapeHtml(record.hall)}・${escapeHtml(record.machine)}</small><p>${escapeHtml(record.reason)}</p></div><strong>${record.score}<small>点</small></strong>
+      <span class="rank">${index + 1}</span><div class="rank-main"><b>配置 ${escapeHtml(record.position)} / 台 ${escapeHtml(record.unit)}</b><small>${escapeHtml(record.hall)}・${escapeHtml(record.machine)}</small><p>${escapeHtml(record.reason)}</p><button class="reason-toggle" type="button" data-reason-index="${index}" aria-expanded="false">狙い根拠を見る</button><div class="score-detail hidden" data-reason-detail="${index}"><div class="breakdown"><span>基礎 <b>${record.scoreBreakdown.base.toFixed(0)}</b></span><span>稼働 <b>${record.scoreBreakdown.volume.toFixed(1)}</b></span><span>初当たり <b>${record.scoreBreakdown.hitRate.toFixed(1)}</b></span><span>グラフ <b>${record.scoreBreakdown.graph.toFixed(0)}</b></span><span>放出 <b>${record.scoreBreakdown.payout.toFixed(1)}</b></span></div><ul>${record.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div></div><strong>${record.score}<small>点</small></strong>
     </article>`).join("") : `<p>まだ記録がありません。入力画面から今日のスクリーンショットを追加してください。</p>`;
+}
+
+function savePrediction() {
+  const snapshots = createPredictionSnapshots(state.records, today);
+  if (!snapshots.length) {
+    toast("稼働データがないため予想を保存できません", true);
+    return;
+  }
+  const existingKeys = new Set(state.predictions.map((item) => `${item.predictionDate}|${item.targetDate}|${item.hall}|${item.machineId}`));
+  const additions = snapshots.filter((item) => !existingKeys.has(`${item.predictionDate}|${item.targetDate}|${item.hall}|${item.machineId}`));
+  if (!additions.length) {
+    toast("明日分の予想はすでに保存されています。予想時点の内容は変更しません", true);
+    return;
+  }
+  state.predictions.push(...additions);
+  persist(); renderPredictionReview();
+  toast(`明日（${additions[0].targetDate}）の予想を保存しました`);
+}
+
+function renderPredictionReview() {
+  const saved = [...state.predictions].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  $("#predictionCount").textContent = `${saved.length}件保存`;
+  const review = saved.find((item) => item.targetDate === today && item.evaluation)
+    || saved.find((item) => item.evaluation);
+  if (!review) {
+    $("#predictionReview").className = "panel prediction-review empty-card";
+    $("#predictionReview").innerHTML = "<p>予想を保存し、翌日の実績を入力すると上位3台を自動で答え合わせします。</p>";
+    return;
+  }
+  const evaluation = review.evaluation;
+  $("#predictionReview").className = "panel prediction-review";
+  $("#predictionReview").innerHTML = `
+    <div class="review-score"><div><span>昨日の予想・上位3台（${escapeHtml(review.targetDate)}実績）</span><b>${evaluation.hitCount}/${evaluation.eligibleCount}台 的中</b></div><strong>${evaluation.hitRate}<small>%</small></strong></div>
+    <p class="hint">的中基準：最大放出2,000枚以上（0Gは対象外）</p>
+    <div class="evaluation-results">${evaluation.results.map((item) => `<div class="${item.eligible ? (item.hit ? "hit" : "miss") : "excluded"}"><b>${item.rank}位・台${escapeHtml(item.unit)}</b><span>${item.eligible ? `${Number(item.maxPayout).toLocaleString()}枚 ${item.hit ? "的中" : "未的中"}` : "未入力または0G"}</span></div>`).join("")}</div>
+    <div class="reflection-grid"><section><h3>良かった点</h3><ul>${evaluation.goodPoints.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></section><section><h3>反省点</h3><ul>${evaluation.reflectionPoints.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></section><section><h3>次回改善案</h3><ul>${evaluation.improvements.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></section></div>`;
 }
 
 function renderHistory() {
@@ -379,12 +549,18 @@ function deleteRecord(recordId) {
 }
 
 function renderAll() {
+  const evaluated = evaluatePredictions(state.predictions || [], state.records);
+  if (evaluated.changed) {
+    state.predictions = evaluated.predictions;
+    persist();
+  }
   renderRanking();
   renderHistory();
+  renderPredictionReview();
 }
 
 function exportJson() {
-  const data = JSON.stringify({ version: "0.4", exportedAt: new Date().toISOString(), records: state.records }, null, 2);
+  const data = JSON.stringify({ version: "0.5", exportedAt: new Date().toISOString(), records: state.records, deletedRecordIds: state.deletedRecordIds || [], predictions: state.predictions || [] }, null, 2);
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([data], { type: "application/json" }));
   link.download = `neraidai-v04-${today}.json`;
@@ -430,6 +606,10 @@ function extractDeletedRecordIds(payload) {
   return Array.isArray(payload?.deletedRecordIds) ? payload.deletedRecordIds : [];
 }
 
+function extractDrivePredictions(payload) {
+  return Array.isArray(payload?.predictions) ? payload.predictions.map(normalizePrediction) : [];
+}
+
 async function syncDrive() {
   const clientId = state.settings.googleClientId?.trim();
   if (!clientId || !window.google?.accounts?.oauth2) {
@@ -450,10 +630,11 @@ async function syncDrive() {
       const deleted = new Set(state.deletedRecordIds);
       const merged = new Map([...extractDriveRecords(remote), ...state.records].filter((record) => record.id && !deleted.has(record.id)).map((record) => [record.id, record]));
       state.records = [...merged.values()].map(normalizeStoredRecord);
+      state.predictions = mergePredictions(extractDrivePredictions(remote), state.predictions || []);
     }
     const metadata = { name: "neraidai-v04.json", parents: list.files?.length ? undefined : ["appDataFolder"] };
     const boundary = `neraidai_${Date.now()}`;
-    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ version: "0.4", records: state.records, deletedRecordIds: state.deletedRecordIds || [] })}\r\n--${boundary}--`;
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ version: "0.5", records: state.records, deletedRecordIds: state.deletedRecordIds || [], predictions: state.predictions || [] })}\r\n--${boundary}--`;
     const fileId = list.files?.[0]?.id;
     const url = fileId ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart` : "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
     const response = await fetch(url, { method: fileId ? "PATCH" : "POST", headers: { ...headers, "Content-Type": `multipart/related; boundary=${boundary}` }, body });
@@ -464,6 +645,7 @@ async function syncDrive() {
   } finally { button.disabled = false; }
 }
 
+if (!isTestRuntime) {
 $$('.nav').forEach((button) => button.addEventListener('click', () => showPage(button.dataset.page)));
 $$('.mode').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
 $("#pickScreenshots").addEventListener("click", () => $("#screenshots").click());
@@ -476,6 +658,16 @@ $("#reviewRows").addEventListener("click", (event) => { const index = event.targ
 $("#recordForm").addEventListener("submit", saveManual);
 $("#settingsForm").addEventListener("submit", saveSettings);
 $("#refreshScore").addEventListener("click", () => { renderRanking(); toast("ランキングを再計算しました"); });
+$("#savePrediction").addEventListener("click", savePrediction);
+$("#ranking").addEventListener("click", (event) => {
+  const index = event.target.dataset.reasonIndex;
+  if (index == null) return;
+  const detail = $(`[data-reason-detail="${index}"]`);
+  const expanded = !detail.classList.contains("hidden");
+  detail.classList.toggle("hidden", expanded);
+  event.target.setAttribute("aria-expanded", String(!expanded));
+  event.target.textContent = expanded ? "狙い根拠を見る" : "根拠を閉じる";
+});
 $("#exportBtn").addEventListener("click", exportJson);
 $("#historyList").addEventListener("click", (event) => {
   const editId = event.target.dataset.editRecord;
@@ -494,3 +686,18 @@ populateGraphSelects();
 renderAll();
 
 if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("./sw.js").catch(console.warn);
+}
+
+export {
+  addDays,
+  canonicalMachine,
+  createPredictionSnapshots,
+  evaluatePrediction,
+  evaluatePredictions,
+  loadState,
+  mergePredictions,
+  normalizePrediction,
+  placementKey,
+  rankedRecords,
+  scoreRecord
+};

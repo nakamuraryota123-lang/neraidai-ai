@@ -10,11 +10,11 @@
   <link rel="icon" href="icon.svg">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="theme.css">
-  <title>狙い台AI v0.4</title>
+  <title>狙い台AI v0.5</title>
 </head>
 <body>
   <header class="topbar">
-    <div><span class="eyebrow">DAILY DATA ENTRY</span><h1>狙い台AI <small>v0.4</small></h1></div>
+    <div><span class="eyebrow">DAILY DATA ENTRY</span><h1>狙い台AI <small>v0.5</small></h1></div>
     <button id="syncBtn" class="sync" type="button" aria-label="Google Driveと同期"><span id="syncDot"></span><b>Drive同期</b></button>
   </header>
 
@@ -64,6 +64,8 @@
     <section id="dashboard" class="page">
       <div class="hero"><div><p id="todayLabel"></p><h2>今日の狙い台</h2></div><button id="refreshScore" class="ghost" type="button">再計算</button></div>
       <div id="summary" class="summary"></div>
+      <div class="prediction-toolbar"><div><span class="eyebrow">PREDICTION</span><h2>予想と振り返り</h2><small id="predictionCount">0件保存</small></div><button id="savePrediction" class="primary" type="button">明日の予想を保存</button></div>
+      <div id="predictionReview" class="panel prediction-review empty-card"></div>
       <div id="ranking" class="ranking empty-card"></div>
     </section>
 
@@ -93,6 +95,6 @@
   </nav>
   <div id="toast" role="status"></div>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
