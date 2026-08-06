@@ -319,7 +319,10 @@ function scoreRecord(record) {
 
 function rankedRecords() {
   const latestByUnit = new Map();
-  [...state.records].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).forEach((record) => latestByUnit.set(`${record.hall}|${record.machineId || canonicalMachine(record.machine).machineId}|${record.position}|${record.unit}`, record));
+  [...state.records].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).forEach((record) => {
+    const stablePosition = String(record.position || record.unit || "").trim();
+    latestByUnit.set(`${record.hall}|${record.machineId || canonicalMachine(record.machine).machineId}|${stablePosition}`, record);
+  });
   return [...latestByUnit.values()].map((record) => ({ ...record, ...scoreRecord(record) })).sort((a, b) => b.score - a.score || Number(a.unit) - Number(b.unit));
 }
 
