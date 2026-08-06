@@ -4,55 +4,66 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0c1222">
-  <meta name="description" content="キクヤ堺本店のパチスロ狙い台をデータからランキングするPWA">
+  <meta name="description" content="スクリーンショットから毎日のパチスロデータを記録し、狙い台をランキングするPWA">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg">
   <link rel="stylesheet" href="styles.css">
-  <title>狙い台AI v0.3</title>
+  <title>狙い台AI v0.4</title>
 </head>
 <body>
   <header class="topbar">
-    <div><span class="eyebrow">KIKUYA SAKAI</span><h1>狙い台AI <small>v0.3</small></h1></div>
-    <button id="syncBtn" class="sync" aria-label="Google Driveと同期"><span id="syncDot"></span><b>Drive同期</b></button>
+    <div><span class="eyebrow">DAILY DATA ENTRY</span><h1>狙い台AI <small>v0.4</small></h1></div>
+    <button id="syncBtn" class="sync" type="button" aria-label="Google Driveと同期"><span id="syncDot"></span><b>Drive同期</b></button>
   </header>
 
   <main>
-    <section id="dashboard" class="page active">
-      <div class="hero">
-        <div><p id="todayLabel"></p><h2>今日の狙い台</h2></div>
-        <button id="refreshScore" class="ghost">再計算</button>
+    <section id="input" class="page active">
+      <div class="section-title"><div><span class="eyebrow">INPUT</span><h2>今日のデータ入力</h2></div></div>
+      <div class="mode-tabs" role="tablist"><button class="mode active" type="button" data-mode="screenshot">スクショ一括</button><button class="mode" type="button" data-mode="manual">手入力</button></div>
+
+      <div id="screenshotPanel" class="panel screenshot-panel">
+        <input id="screenshots" type="file" accept="image/*" multiple hidden>
+        <button id="pickScreenshots" class="dropzone" type="button"><b>スクリーンショットをまとめて選ぶ</b><span>複数枚を一度に選択できます</span></button>
+        <div id="imageList" class="image-list" aria-live="polite"></div>
+        <button id="analyzeAll" class="primary" type="button" disabled>AIでまとめて読み取る</button>
+        <p class="hint">画像は保存時にこの端末内へ保存されます。AI読取時のみ、選択画像をOpenAIへ送信します。</p>
       </div>
+
+      <form id="reviewForm" class="panel hidden">
+        <div class="review-heading"><div><span class="eyebrow">REVIEW</span><h3>読み取り結果を確認・修正</h3></div><button id="addReviewRow" class="ghost" type="button">＋ 行を追加</button></div>
+        <div class="table-wrap">
+          <table class="review-table">
+            <thead><tr><th>日付</th><th>ホール</th><th>機種</th><th>配置番号</th><th>台番号</th><th>総回転数</th><th>BIG</th><th>REG</th><th>最大放出</th><th>グラフ形状</th><th>メモ</th><th></th></tr></thead>
+            <tbody id="reviewRows"></tbody>
+          </table>
+        </div>
+        <button class="primary full" type="submit">確認したデータをまとめて保存</button>
+      </form>
+
+      <form id="recordForm" class="panel form-grid hidden">
+        <label>日付<input id="date" type="date" required></label>
+        <label>ホール<input id="hall" value="キクヤ堺本店" required></label>
+        <label>機種<input id="machine" value="L真打吉宗" required></label>
+        <label>配置番号<input id="position" inputmode="numeric" placeholder="例: 101" required></label>
+        <label>台番号<input id="unit" inputmode="numeric" placeholder="例: 0531" required></label>
+        <label>総回転数<input id="games" type="number" min="0" value="0" required></label>
+        <label>BIG<input id="bb" type="number" min="0" value="0" required></label>
+        <label>REG<input id="rb" type="number" min="0" value="0" required></label>
+        <label>最大放出<input id="maxPayout" type="number" min="0" value="0" required></label>
+        <label>グラフ形状<select id="graphPattern"></select></label>
+        <label class="wide">メモ<textarea id="memo" rows="2" placeholder="イベント、据え置き傾向など"></textarea></label>
+        <button class="primary wide" type="submit">このデータを保存</button>
+      </form>
+    </section>
+
+    <section id="dashboard" class="page">
+      <div class="hero"><div><p id="todayLabel"></p><h2>今日の狙い台</h2></div><button id="refreshScore" class="ghost" type="button">再計算</button></div>
       <div id="summary" class="summary"></div>
       <div id="ranking" class="ranking empty-card"></div>
     </section>
 
-    <section id="input" class="page">
-      <div class="section-title"><div><span class="eyebrow">DATA ENTRY</span><h2>データを記録</h2></div></div>
-      <div class="mode-tabs"><button class="mode active" data-mode="manual">手入力</button><button class="mode" data-mode="screenshot">スクショAI</button></div>
-      <form id="recordForm" class="panel form-grid">
-        <label>日付<input id="date" type="date" required></label>
-        <label>ホール<select id="hall"><option>キクヤ堺本店</option></select></label>
-        <label>機種<select id="machine"><option>L真打吉宗</option></select></label>
-        <label>配置番号<input id="position" inputmode="numeric" placeholder="例: 101" required></label>
-        <label>台番号<input id="unit" inputmode="numeric" placeholder="例: 1234" required></label>
-        <label>総回転数<input id="games" type="number" min="0" placeholder="例: 5420" required></label>
-        <label>BB回数<input id="bb" type="number" min="0" value="0" required></label>
-        <label>RB回数<input id="rb" type="number" min="0" value="0" required></label>
-        <label>差枚<input id="difference" type="number" placeholder="例: 1850" required></label>
-        <label class="wide">メモ<textarea id="memo" rows="2" placeholder="イベント、据え置き傾向など"></textarea></label>
-        <button class="primary wide" type="submit">このデータを保存</button>
-      </form>
-      <div id="screenshotPanel" class="panel screenshot-panel hidden">
-        <input id="screenshot" type="file" accept="image/*" capture="environment" hidden>
-        <button id="pickScreenshot" class="dropzone"><b>スクリーンショットを選ぶ</b><span>画像から日付・台番号・回転数・差枚を読み取ります</span></button>
-        <img id="preview" alt="選択したスクリーンショット" hidden>
-        <button id="analyze" class="primary" disabled>AIで読み取る</button>
-        <p class="hint">設定画面でOpenAI APIキーを登録すると利用できます。画像は端末からOpenAIへ直接送信されます。</p>
-      </div>
-    </section>
-
     <section id="history" class="page">
-      <div class="section-title"><div><span class="eyebrow">HISTORY</span><h2>記録履歴</h2></div><button id="exportBtn" class="ghost">JSON出力</button></div>
+      <div class="section-title"><div><span class="eyebrow">HISTORY</span><h2>記録履歴</h2></div><button id="exportBtn" class="ghost" type="button">JSON出力</button></div>
       <div id="chart" class="panel chart"></div>
       <div id="historyList"></div>
     </section>
@@ -61,18 +72,18 @@
       <div class="section-title"><div><span class="eyebrow">SETTINGS</span><h2>設定</h2></div></div>
       <form id="settingsForm" class="panel form-grid">
         <label class="wide">OpenAI APIキー<input id="openaiKey" type="password" autocomplete="off" placeholder="sk-...（この端末だけに保存）"></label>
-        <label class="wide">Google OAuth クライアントID<input id="googleClientId" placeholder="xxxx.apps.googleusercontent.com"></label>
+        <label class="wide">Google OAuth クライアントID<input id="googleClientId" autocomplete="off" placeholder="xxxx.apps.googleusercontent.com"></label>
         <button class="primary wide">設定を保存</button>
       </form>
-      <div class="panel"><h3>マスタ管理</h3><p>Version 1: キクヤ堺本店 / L真打吉宗</p><p class="hint">データ構造は複数ホール・複数機種・配置番号と台番号の履歴に対応しています。</p></div>
-      <button id="demoBtn" class="ghost full">サンプルデータを追加</button>
-      <button id="clearBtn" class="danger full">全データを削除</button>
+      <div class="panel"><h3>端末内保存</h3><p class="hint">記録と設定はlocalStorage、元スクリーンショットはIndexedDBに保存します。APIキーや認証情報はGitHubへ送信されません。</p></div>
+      <button id="demoBtn" class="ghost full" type="button">サンプルデータを追加</button>
+      <button id="clearBtn" class="danger full" type="button">全データを削除</button>
     </section>
   </main>
 
   <nav class="bottom-nav">
-    <button class="nav active" data-page="dashboard"><span>◎</span>ランキング</button>
-    <button class="nav" data-page="input"><span>＋</span>入力</button>
+    <button class="nav active" data-page="input"><span>＋</span>入力</button>
+    <button class="nav" data-page="dashboard"><span>◎</span>ランキング</button>
     <button class="nav" data-page="history"><span>⌁</span>履歴</button>
     <button class="nav" data-page="settings"><span>⚙</span>設定</button>
   </nav>
