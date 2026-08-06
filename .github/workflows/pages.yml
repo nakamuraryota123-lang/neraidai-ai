@@ -23,7 +23,7 @@ jobs:
       - name: Prepare static site
         run: |
           mkdir _site
-          cp index.html app.js styles.css theme.css sw.js manifest.webmanifest icon.svg slot-hero.webp _site/
+          cp index.html app.js styles.css theme.css sw.js manifest.webmanifest icon.svg slot-hero.webp _worker.js _site/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

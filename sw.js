@@ -1,4 +1,4 @@
-const CACHE = "neraidai-v04-history-delete-3";
+const CACHE = "neraidai-v04-pages-ai-proxy-4";
 const ASSETS = ["./", "./index.html", "./styles.css", "./theme.css", "./app.js", "./manifest.webmanifest", "./icon.svg", "./slot-hero.webp"];
 self.addEventListener("install", (event) => event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener("activate", (event) => event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))).then(() => self.clients.claim())));
