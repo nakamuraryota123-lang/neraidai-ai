@@ -143,13 +143,19 @@ function renderImages() {
   $("#analyzeAll").disabled = !selectedFiles.length;
 }
 
+function normalizeMachineName() {
+  // v0.4 supports this machine only. Keep screenshot OCR variations from
+  // creating separate machine names until the machine master is introduced.
+  return "L真打吉宗";
+}
+
 function normalizeRow(row = {}) {
   const text = (value, fallback = "") => value == null ? fallback : String(value);
   const number = (value) => Math.max(0, Number.parseInt(value, 10) || 0);
   return {
     date: /^\d{4}-\d{2}-\d{2}$/.test(row.date) ? row.date : today,
-    hall: text(row.hall, $("#hall").value || "キクヤ堺本店"),
-    machine: text(row.machine, $("#machine").value || "L真打吉宗"),
+    hall: "キクヤ堺本店",
+    machine: normalizeMachineName(row.machine),
     position: text(row.position || row.unit),
     unit: text(row.unit || row.position),
     games: number(row.games), bb: number(row.bb), rb: number(row.rb),
