@@ -328,13 +328,72 @@ function saveManual(event) {
   toast("保存してランキングを再計算しました");
 }
 
-function scoreRecord(record) {
+function confidenceLabel(sampleSize) {
+  if (sampleSize >= 12) return "高";
+  if (sampleSize >= 6) return "中";
+  return "低";
+}
+
+function hitRecord(record) {
+  return Number(record.games) > 0 && Number(record.maxPayout) >= 2000;
+}
+
+function trendStat(records, predicate) {
+  const samples = records.filter((record) => Number(record.games) > 0 && predicate(record));
+  const hits = samples.filter(hitRecord).length;
+  return { samples: samples.length, hits, rate: samples.length ? Math.round(hits / samples.length * 100) : 0 };
+}
+
+function analyzeTendency(record, records, targetDate) {
+  const machineId = record.machineId || canonicalMachine(record.machine).machineId;
+  const latestHistory = new Map();
+  records.filter((item) => item.date < targetDate && item.hall === record.hall
+    && (item.machineId || canonicalMachine(item.machine).machineId) === machineId)
+    .sort((a, b) => String(a.updatedAt || a.createdAt).localeCompare(String(b.updatedAt || b.createdAt)))
+    .forEach((item) => latestHistory.set(`${item.date}|${placementKey(item.position || item.unit)}`, item));
+  const history = [...latestHistory.values()];
+  const position = placementKey(record.position || record.unit);
+  const ending = position.match(/\d$/)?.[0] || "";
+  const weekday = new Date(`${targetDate}T00:00:00Z`).getUTCDay();
+  const dimensions = [
+    { key: "placement", label: `配置${position}`, weight: 8, stat: trendStat(history, (item) => placementKey(item.position || item.unit) === position) },
+    { key: "ending", label: `末尾${ending}`, weight: 5, stat: trendStat(history, (item) => ending && placementKey(item.position || item.unit).endsWith(ending)) },
+    { key: "weekday", label: `${["日", "月", "火", "水", "木", "金", "土"][weekday]}曜日`, weight: 5, stat: trendStat(history, (item) => new Date(`${item.date}T00:00:00Z`).getUTCDay() === weekday) }
+  ];
+  const previousDate = addDays(targetDate, -1);
+  const previous = history.filter((item) => item.date === previousDate && placementKey(item.position || item.unit) === position)
+    .sort((a, b) => String(a.updatedAt || a.createdAt).localeCompare(String(b.updatedAt || b.createdAt))).at(-1);
+  if (previous && !hitRecord(previous)) {
+    const recoverySamples = [];
+    const byDate = new Map(history.filter((item) => placementKey(item.position || item.unit) === position).map((item) => [item.date, item]));
+    byDate.forEach((item, date) => {
+      const next = byDate.get(addDays(date, 1));
+      if (Number(item.games) > 0 && !hitRecord(item) && next) recoverySamples.push(next);
+    });
+    dimensions.push({ key: "recovery", label: "前日不発後", weight: 5, stat: trendStat(recoverySamples, () => true) });
+  }
+  const usable = dimensions.filter((item) => item.stat.samples > 0);
+  const score = usable.reduce((sum, item) => {
+    const reliability = Math.min(1, item.stat.samples / 8);
+    return sum + item.weight * (item.stat.rate / 100) * reliability;
+  }, 0);
+  const sampleSize = Math.max(0, ...usable.map((item) => item.stat.samples));
+  const reasons = usable.filter((item) => item.stat.samples >= 2)
+    .sort((a, b) => b.stat.samples - a.stat.samples)
+    .map((item) => `${item.label}は${item.stat.hits}/${item.stat.samples}件的中（${item.stat.rate}%）`)
+    .slice(0, 3);
+  if (!reasons.length) reasons.push("傾向判定には履歴がまだ不足しています");
+  return { score: Math.round(Math.min(20, score) * 10) / 10, sampleSize, confidence: confidenceLabel(sampleSize), dimensions, reasons };
+}
+
+function scoreRecord(record, tendency = { score: 0, sampleSize: 0, confidence: "低", reasons: [] }) {
   const games = Number(record.games) || 0;
   if (!games) return {
     score: 0,
     reason: "未稼働データ（ランキング対象外）",
     reasons: ["稼働0Gのため判定対象外"],
-    scoreBreakdown: { base: 0, volume: 0, hitRate: 0, graph: 0, payout: 0, total: 0 }
+    tendency,
+    scoreBreakdown: { base: 0, volume: 0, hitRate: 0, graph: 0, payout: 0, tendency: 0, total: 0 }
   };
   const hitsPer1000 = ((Number(record.bb) || 0) + (Number(record.rb) || 0)) / games * 1000;
   const scoreBreakdown = {
@@ -342,7 +401,8 @@ function scoreRecord(record) {
     volume: Math.min(25, games / 240),
     hitRate: Math.min(20, hitsPer1000 * 2),
     graph: { uptrend: 12, multiple_waves: 8, v_recovery: 6, flat: 1, unknown: 0, inverted_v: -2, spike: -3, downtrend: -8, inactive: -25 }[record.graphPattern] || 0,
-    payout: Math.min(8, (Number(record.maxPayout) || 0) / 800)
+    payout: Math.min(8, (Number(record.maxPayout) || 0) / 800),
+    tendency: tendency.score || 0
   };
   const score = Math.round(Math.max(0, Math.min(100, Object.values(scoreBreakdown).reduce((sum, value) => sum + value, 0))));
   scoreBreakdown.total = score;
@@ -351,18 +411,22 @@ function scoreRecord(record) {
     `${games.toLocaleString()}Gの稼働量`,
     `BIG+REGが${hitsPer1000.toFixed(1)}回/千G`,
     `グラフ形状は${graphPatterns[record.graphPattern] || "不明"}`,
-    `最大放出${Number(record.maxPayout || 0).toLocaleString()}枚`
+    `最大放出${Number(record.maxPayout || 0).toLocaleString()}枚`,
+    ...tendency.reasons
   ];
-  return { score, reason, reasons, scoreBreakdown };
+  return { score, reason, reasons, tendency, scoreBreakdown };
 }
 
-function rankedRecords(records = state.records) {
+function rankedRecords(records = state.records, targetDate = addDays(records.reduce((latest, item) => item.date > latest ? item.date : latest, "1970-01-01"), 1)) {
   const latestByUnit = new Map();
-  [...records].sort((a, b) => String(a.updatedAt || a.createdAt).localeCompare(String(b.updatedAt || b.createdAt))).forEach((record) => {
+  records.filter((record) => record.date < targetDate).sort((a, b) => String(a.updatedAt || a.createdAt).localeCompare(String(b.updatedAt || b.createdAt))).forEach((record) => {
     const stablePosition = placementKey(record.position || record.unit);
     latestByUnit.set(`${record.hall}|${record.machineId || canonicalMachine(record.machine).machineId}|${stablePosition}`, record);
   });
-  return [...latestByUnit.values()].map((record) => ({ ...record, ...scoreRecord(record) })).sort((a, b) => b.score - a.score || Number(a.unit) - Number(b.unit));
+  return [...latestByUnit.values()].map((record) => {
+    const tendency = analyzeTendency(record, records, targetDate);
+    return { ...record, ...scoreRecord(record, tendency) };
+  }).sort((a, b) => b.score - a.score || Number(a.unit) - Number(b.unit));
 }
 
 function addDays(date, days) {
@@ -373,7 +437,7 @@ function addDays(date, days) {
 
 function createPredictionSnapshots(records, predictionDate, targetDate = addDays(predictionDate, 1), idFactory = uid) {
   const groups = new Map();
-  rankedRecords(records).filter((record) => Number(record.games) > 0).forEach((record) => {
+  rankedRecords(records.filter((record) => record.date <= predictionDate), targetDate).filter((record) => Number(record.games) > 0).forEach((record) => {
     const machine = canonicalMachine(record.machine);
     const key = `${record.hall}|${record.machineId || machine.machineId}`;
     if (!groups.has(key)) groups.set(key, { hall: record.hall, machineId: record.machineId || machine.machineId, entries: [] });
@@ -395,6 +459,7 @@ function createPredictionSnapshots(records, predictionDate, targetDate = addDays
       unit: String(record.unit || record.position || ""),
       score: record.score,
       scoreBreakdown: { ...record.scoreBreakdown },
+      tendency: structuredClone(record.tendency),
       reasons: [...record.reasons]
     }))
   }));
@@ -468,14 +533,31 @@ function evaluatePredictions(predictions, records, now = new Date().toISOString(
 }
 
 function renderRanking() {
-  const ranked = rankedRecords();
+  const targetDate = addDays(today, 1);
+  const ranked = rankedRecords(state.records.filter((record) => record.date <= today), targetDate);
   const active = ranked.filter((record) => record.games > 0);
   $("#summary").innerHTML = `<div><b>${state.records.length}</b><span>保存件数</span></div><div><b>${active.length}</b><span>稼働台</span></div><div><b>${active[0]?.score ?? 0}</b><span>最高スコア</span></div>`;
   $("#ranking").className = ranked.length ? "ranking" : "ranking empty-card";
+  renderHabitAnalysis(ranked, targetDate);
   $("#ranking").innerHTML = ranked.length ? ranked.map((record, index) => `
     <article class="rank-card ${index === 0 ? "top" : ""}">
-      <span class="rank">${index + 1}</span><div class="rank-main"><b>配置 ${escapeHtml(record.position)} / 台 ${escapeHtml(record.unit)}</b><small>${escapeHtml(record.hall)}・${escapeHtml(record.machine)}</small><p>${escapeHtml(record.reason)}</p><button class="reason-toggle" type="button" data-reason-index="${index}" aria-expanded="false">狙い根拠を見る</button><div class="score-detail hidden" data-reason-detail="${index}"><div class="breakdown"><span>基礎 <b>${record.scoreBreakdown.base.toFixed(0)}</b></span><span>稼働 <b>${record.scoreBreakdown.volume.toFixed(1)}</b></span><span>初当たり <b>${record.scoreBreakdown.hitRate.toFixed(1)}</b></span><span>グラフ <b>${record.scoreBreakdown.graph.toFixed(0)}</b></span><span>放出 <b>${record.scoreBreakdown.payout.toFixed(1)}</b></span></div><ul>${record.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div></div><strong>${record.score}<small>点</small></strong>
+      <span class="rank">${index + 1}</span><div class="rank-main"><b>配置 ${escapeHtml(record.position)} / 台 ${escapeHtml(record.unit)}</b><small>${escapeHtml(record.hall)}・${escapeHtml(record.machine)}</small><p>${escapeHtml(record.reason)}</p><span class="confidence confidence-${record.tendency.confidence}">癖分析 ${record.tendency.confidence}・${record.tendency.sampleSize}標本</span><button class="reason-toggle" type="button" data-reason-index="${index}" aria-expanded="false">狙い根拠を見る</button><div class="score-detail hidden" data-reason-detail="${index}"><div class="breakdown"><span>基礎 <b>${record.scoreBreakdown.base.toFixed(0)}</b></span><span>稼働 <b>${record.scoreBreakdown.volume.toFixed(1)}</b></span><span>初当たり <b>${record.scoreBreakdown.hitRate.toFixed(1)}</b></span><span>グラフ <b>${record.scoreBreakdown.graph.toFixed(0)}</b></span><span>放出 <b>${record.scoreBreakdown.payout.toFixed(1)}</b></span><span>ホール傾向 <b>${record.scoreBreakdown.tendency.toFixed(1)}</b></span></div><ul>${record.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div></div><strong>${record.score}<small>点</small></strong>
     </article>`).join("") : `<p>まだ記録がありません。入力画面から今日のスクリーンショットを追加してください。</p>`;
+}
+
+function renderHabitAnalysis(ranked, targetDate) {
+  const node = $("#habitAnalysis");
+  const dimensions = ranked.flatMap((record) => record.tendency.dimensions)
+    .filter((item) => item.stat.samples >= 2)
+    .sort((a, b) => b.stat.rate - a.stat.rate || b.stat.samples - a.stat.samples);
+  if (!dimensions.length) {
+    node.className = "panel habit-analysis empty-card";
+    node.innerHTML = "<p>履歴が増えると、配置・末尾・曜日・前日不発後の傾向を表示します。</p>";
+    return;
+  }
+  const unique = [...new Map(dimensions.map((item) => [`${item.key}|${item.label}`, item])).values()].slice(0, 5);
+  node.className = "panel habit-analysis";
+  node.innerHTML = `<div class="habit-heading"><div><span class="eyebrow">HALL PATTERN</span><h3>設定師の癖候補</h3></div><small>${escapeHtml(targetDate)}向け・2,000枚基準</small></div><div class="habit-grid">${unique.map((item) => `<div><b>${escapeHtml(item.label)}</b><strong>${item.stat.rate}%</strong><span>${item.stat.hits}/${item.stat.samples}件・信頼度${confidenceLabel(item.stat.samples)}</span></div>`).join("")}</div><p class="hint">実設定の断定ではありません。稼働あり・最大放出2,000枚以上を代理指標として、予想日より前の履歴だけを集計します。</p>`;
 }
 
 function savePrediction() {
@@ -560,7 +642,7 @@ function renderAll() {
 }
 
 function exportJson() {
-  const data = JSON.stringify({ version: "0.5", exportedAt: new Date().toISOString(), records: state.records, deletedRecordIds: state.deletedRecordIds || [], predictions: state.predictions || [] }, null, 2);
+  const data = JSON.stringify({ version: "0.6", exportedAt: new Date().toISOString(), records: state.records, deletedRecordIds: state.deletedRecordIds || [], predictions: state.predictions || [] }, null, 2);
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([data], { type: "application/json" }));
   link.download = `neraidai-v04-${today}.json`;
@@ -634,7 +716,7 @@ async function syncDrive() {
     }
     const metadata = { name: "neraidai-v04.json", parents: list.files?.length ? undefined : ["appDataFolder"] };
     const boundary = `neraidai_${Date.now()}`;
-    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ version: "0.5", records: state.records, deletedRecordIds: state.deletedRecordIds || [], predictions: state.predictions || [] })}\r\n--${boundary}--`;
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ version: "0.6", records: state.records, deletedRecordIds: state.deletedRecordIds || [], predictions: state.predictions || [] })}\r\n--${boundary}--`;
     const fileId = list.files?.[0]?.id;
     const url = fileId ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart` : "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
     const response = await fetch(url, { method: fileId ? "PATCH" : "POST", headers: { ...headers, "Content-Type": `multipart/related; boundary=${boundary}` }, body });
@@ -690,6 +772,7 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.ser
 
 export {
   addDays,
+  analyzeTendency,
   canonicalMachine,
   createPredictionSnapshots,
   evaluatePrediction,

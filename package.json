@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "check": "node --check app.js && node --check sw.js && node --check _worker.js && node --check worker/src/index.js",
-    "test": "node --test worker/test/index.test.js test/v05.test.js",
+    "test": "node --test worker/test/index.test.js test/v05.test.js test/v06.test.js",
     "worker:dev": "wrangler dev --config worker/wrangler.jsonc",
     "worker:deploy": "wrangler deploy --config worker/wrangler.jsonc"
   },
